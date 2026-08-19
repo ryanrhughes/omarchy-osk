@@ -2,7 +2,14 @@
 
 A touch-friendly on-screen keyboard for tablets and touchscreen machines, built as an [Omarchy](https://omarchy.org) shell plugin.
 
-A small keyboard button sits in the bottom-right corner of the screen at all times. Tap it and a full QWERTY keyboard rises from the bottom edge, reserving its space so tiled windows shrink above it — the focused input never hides behind the keys. Tap the keyboard-off key (bottom-right of the board) to put it away and get the button back.
+A small keyboard button sits in the bottom-right corner of the screen at all times. Tap it and a full QWERTY keyboard rises from the bottom edge. A slim handle strip runs along the keyboard's top edge with a ✕ close button at its top-right corner; the keyboard-off key on the board does the same. Closing it brings the button back.
+
+The keyboard has two modes, switched from the handle strip:
+
+- **Docked** (default) — the keyboard reserves its space at the bottom of the screen, so tiled windows shrink above it and the focused input never hides behind the keys.
+- **Floating** — the keyboard reserves nothing and sits above your windows; drag it anywhere by its handle. Dragging the handle while docked tears the keyboard off into floating mode.
+
+The mode and float position are remembered across sessions.
 
 Keys are injected with `wtype` (part of Omarchy's base package set), so the keyboard types into whichever window has focus, exactly like a hardware keyboard. The keyboard itself never steals focus.
 
@@ -20,19 +27,23 @@ Keys are injected with `wtype` (part of Omarchy's base package set), so the keyb
 omarchy plugin add https://github.com/ryanrhughes/omarchy-osk.git --enable
 ```
 
-Or by hand: copy this folder to `~/.config/omarchy/plugins/ryan.osk/`, then:
+Or by hand: copy this folder to `~/.config/omarchy/plugins/ryanrhughes.osk/`, then:
 
 ```bash
 omarchy-shell shell rescanPlugins
-omarchy plugin enable ryan.osk
+omarchy plugin enable ryanrhughes.osk
 ```
 
 ## CLI
 
 ```bash
-omarchy-shell shell toggle ryan.osk '{}'   # toggle the keyboard
-omarchy-shell osk toggle                   # same, via the plugin's own IPC target
-omarchy-shell osk state                    # "open" or "closed"
+omarchy-shell shell toggle ryanrhughes.osk '{}'   # toggle the keyboard
+omarchy-shell osk toggle                          # same, via the plugin's own IPC target
+omarchy-shell osk state                           # "open" or "closed"
+omarchy-shell osk mode                            # "docked" or "floating"
+omarchy-shell osk dock                            # dock to the bottom edge
+omarchy-shell osk undock                          # float at the last float position
+omarchy-shell osk moveTo 100 200                  # float at left=100, bottom=200
 ```
 
 Handy as a Hyprland binding in `~/.config/hypr/bindings.lua` if you want a hardware key to raise it too.

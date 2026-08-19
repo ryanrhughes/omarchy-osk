@@ -15,6 +15,9 @@
 var GLYPH = {
   keyboard: String.fromCodePoint(0xf030c), // nf-md-keyboard
   hide: String.fromCodePoint(0xf0310),     // nf-md-keyboard_off
+  close: String.fromCodePoint(0xf0156),    // nf-md-close
+  floatOut: String.fromCodePoint(0xf05b2), // nf-md-window_restore
+  dock: String.fromCodePoint(0xf10a9),     // nf-md-dock_bottom
   left: String.fromCodePoint(0x2190),
   up: String.fromCodePoint(0x2191),
   right: String.fromCodePoint(0x2192),

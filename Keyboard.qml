@@ -9,16 +9,25 @@ import "KeyboardModel.js" as Model
 // A touch-friendly on-screen keyboard.
 //
 // Two layer-shell surfaces: a persistent toggle button pinned to the
-// bottom-right corner, and the keyboard itself — a bottom strip that
-// reserves its height (exclusive zone) so tiled windows shrink above it
-// instead of hiding the focused input behind the keys.
+// bottom-right corner, and the keyboard itself. The keyboard has two modes:
+//
+//   docked   — a bottom strip that reserves its height (exclusive zone) so
+//              tiled windows shrink above it instead of hiding the focused
+//              input behind the keys.
+//   floating — reserves nothing and sits above windows; drag it anywhere
+//              by the handle strip along its top edge.
+//
+// The handle strip also carries the mode toggle and an explicit close
+// button. Dragging the handle while docked tears the keyboard off into
+// floating mode. Mode and float position persist across sessions in
+// ~/.local/state/omarchy/<plugin-id>.json.
 //
 // Neither surface ever takes keyboard focus, so the app being typed into
 // keeps it. Taps are injected with wtype (part of Omarchy's base package
 // set), which means the keyboard types into whatever window has focus,
 // exactly like a hardware keyboard would.
 //
-// Summon/hide from the CLI:  omarchy-shell shell toggle ryan.osk '{}'
+// Summon/hide from the CLI:  omarchy-shell shell toggle <plugin-id> '{}'
 // or via the plugin's own target:  omarchy-shell osk toggle
 Item {
   id: root
@@ -29,6 +38,13 @@ Item {
 
   property bool opened: false
 
+  // Docked pushes tiles; floating overlays them at (floatX, floatY),
+  // measured as left/bottom margins. -1 means "never floated yet" and
+  // picks a sensible spot on first undock.
+  property bool docked: true
+  property real floatX: -1
+  property real floatY: -1
+
   // Modifier latches: 0 = off, 1 = one-shot (clears after the next key),
   // 2 = locked (tap the modifier again to release). Caps toggles the shift
   // lock directly, the way caps lock should.
@@ -38,6 +54,17 @@ Item {
   property int superState: 0
 
   readonly property bool shiftOn: shiftState > 0
+
+  readonly property string stateDir: {
+    var xdg = Quickshell.env("XDG_STATE_HOME")
+    return (xdg ? xdg : Quickshell.env("HOME") + "/.local/state") + "/omarchy"
+  }
+  // Computed on demand rather than bound: the host injects `manifest` after
+  // instantiation, and a stale binding read here once sent the state load to
+  // the fallback filename.
+  function statePath() {
+    return stateDir + "/" + (manifest ? manifest.id : "osk") + ".json"
+  }
 
   function open(payloadJson) { opened = true }
 
@@ -61,6 +88,61 @@ Item {
   function dismiss() {
     if (shell && manifest) shell.hide(manifest.id)
     else close()
+  }
+
+  function setDocked(value) {
+    if (!value && floatX < 0) {
+      // First undock: lift off from where the docked keyboard sits.
+      floatX = Math.round((panel.screenWidth - panel.cardWidth) / 2)
+      floatY = Style.gapsOut
+    }
+    docked = value
+    clampFloat()
+    saveState()
+  }
+
+  function clampFloat() {
+    if (floatX < 0) return
+    floatX = Math.min(Math.max(0, floatX), Math.max(0, panel.screenWidth - panel.cardWidth))
+    floatY = Math.min(Math.max(0, floatY), Math.max(0, panel.screenHeight - card.height))
+  }
+
+  function saveState() {
+    var json = JSON.stringify({ docked: docked, floatX: Math.round(floatX), floatY: Math.round(floatY) })
+    Quickshell.execDetached(["bash", "-c",
+      "mkdir -p \"$0\" && printf '%s' \"$1\" > \"$2\"", stateDir, json, statePath()])
+  }
+
+  function applyState(text) {
+    try {
+      var data = JSON.parse(text)
+      if (typeof data.docked === "boolean") docked = data.docked
+      if (isFinite(Number(data.floatX)) && Number(data.floatX) >= 0) floatX = Number(data.floatX)
+      if (isFinite(Number(data.floatY)) && Number(data.floatY) >= 0) floatY = Number(data.floatY)
+    } catch (e) { /* first run or unreadable */ }
+  }
+
+  // The host injects `manifest` after instantiation, so wait for it before
+  // reading the state file — statePath is derived from the plugin id.
+  property bool stateLoadStarted: false
+
+  function loadStateOnce() {
+    if (stateLoadStarted || !manifest) return
+    stateLoadStarted = true
+    stateLoadProcess.command = ["bash", "-c", "cat \"$0\" 2>/dev/null || true", statePath()]
+    stateLoadProcess.running = true
+  }
+
+  onManifestChanged: loadStateOnce()
+  Component.onCompleted: loadStateOnce()
+
+  Process {
+    id: stateLoadProcess
+    stdout: StdioCollector {
+      id: stateLoadOutput
+      waitForEnd: true
+    }
+    onExited: root.applyState(stateLoadOutput.text)
   }
 
   function tap(def) {
@@ -96,8 +178,8 @@ Item {
   function releaseOneShots() {
     if (shiftState === 1) shiftState = 0
     if (ctrlState === 1) ctrlState = 0
-    if (altState === 1) altState = 0
     if (superState === 1) superState = 0
+    if (altState === 1) altState = 0
   }
 
   function modState(mod) {
@@ -147,6 +229,15 @@ Item {
       var def = Model.findKey(name)
       if (!def) return "unknown key: " + name
       root.tap(def)
+      return "ok"
+    }
+    function dock(): string { root.setDocked(true); return "ok" }
+    function undock(): string { root.setDocked(false); return "ok" }
+    function mode(): string { return root.docked ? "docked" : "floating" }
+    function moveTo(x: string, y: string): string {
+      root.floatX = Number(x)
+      root.floatY = Number(y)
+      root.setDocked(false)
       return "ok"
     }
     function state(): string { return root.opened ? "open" : "closed" }
@@ -199,20 +290,31 @@ Item {
   PanelWindow {
     id: panel
     visible: root.opened
-    anchors { bottom: true; left: true; right: true }
+    // Docked: a full-width bottom strip with the card centered inside it.
+    // Floating: the window is exactly the card, anchored left+bottom and
+    // positioned by margins.
+    anchors { bottom: true; left: true; right: root.docked }
+    margins {
+      left: root.docked ? 0 : Math.round(root.floatX)
+      bottom: root.docked ? 0 : Math.round(root.floatY)
+    }
+    implicitWidth: cardWidth
     implicitHeight: card.height
     color: "transparent"
     WlrLayershell.namespace: "omarchy-osk"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
-    exclusionMode: ExclusionMode.Auto
-    // Only the card itself takes input; clicks beside it on wide screens
-    // fall through to whatever is below.
+    exclusionMode: root.docked ? ExclusionMode.Auto : ExclusionMode.Ignore
+    // Only the card itself takes input; when docked, clicks beside it on
+    // wide screens fall through to whatever is below.
     mask: Region { item: card }
 
+    readonly property real screenWidth: panel.screen ? panel.screen.width : 1920
+    readonly property real screenHeight: panel.screen ? panel.screen.height : 1080
     readonly property real gap: Style.space(6)
     readonly property real pad: Style.space(10)
-    readonly property real cardWidth: Math.min(panel.width - Style.gapsOut * 2, Style.space(960))
+    readonly property real handleHeight: Style.space(22)
+    readonly property real cardWidth: Math.min(screenWidth - Style.gapsOut * 2, Style.space(960))
     // Every row spans 16 units with 15 gaps between keys, whatever the key
     // count, so one unit size lines the whole grid up.
     readonly property real unit: (cardWidth - card.borderLeft - card.borderRight - pad * 2 - gap * 15) / 16
@@ -222,7 +324,7 @@ Item {
       id: card
       width: panel.cardWidth
       height: card.borderTop + card.borderBottom + panel.pad * 2
-        + panel.keyHeight * 5 + panel.gap * 4
+        + panel.handleHeight + panel.keyHeight * 5 + panel.gap * 5
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: parent.bottom
       color: Util.alpha(Color.background, 0.97)
@@ -242,6 +344,72 @@ Item {
         anchors.rightMargin: card.borderRight + panel.pad
         spacing: panel.gap
 
+        // Handle strip: drag pill in the middle, mode toggle + close on the
+        // right. Dragging it moves a floating keyboard; dragging while
+        // docked tears the keyboard off into floating mode.
+        Item {
+          id: handle
+          width: parent.width
+          height: panel.handleHeight
+
+          MouseArea {
+            id: dragArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: root.docked ? Qt.OpenHandCursor : Qt.SizeAllCursor
+            property real pressX: 0
+            property real pressY: 0
+            onPressed: mouse => {
+              pressX = mouse.x
+              pressY = mouse.y
+            }
+            onPositionChanged: mouse => {
+              if (!pressed) return
+              var dx = mouse.x - pressX
+              var dy = mouse.y - pressY
+              if (root.docked) {
+                // Tear-off: a real drag (not a sloppy tap) undocks in place,
+                // then the same gesture keeps moving the floating keyboard.
+                if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return
+                root.floatX = Math.round((panel.screenWidth - panel.cardWidth) / 2)
+                root.floatY = 0
+                root.setDocked(false)
+                return
+              }
+              root.floatX += dx
+              root.floatY -= dy
+              root.clampFloat()
+            }
+            onReleased: root.saveState()
+          }
+
+          Rectangle {
+            anchors.centerIn: parent
+            width: Style.space(52)
+            height: Style.space(4)
+            radius: height / 2
+            color: Util.alpha(Color.popups.text, dragArea.containsMouse ? 0.5 : 0.28)
+          }
+
+          Row {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(4)
+
+            HandleButton {
+              face: root.docked ? Model.GLYPH.floatOut : Model.GLYPH.dock
+              hoverColor: Color.accent
+              onTapped: root.setDocked(!root.docked)
+            }
+
+            HandleButton {
+              face: Model.GLYPH.close
+              hoverColor: Color.urgent
+              onTapped: root.dismiss()
+            }
+          }
+        }
+
         Repeater {
           model: Model.ROWS
 
@@ -260,6 +428,37 @@ Item {
           }
         }
       }
+    }
+  }
+
+  component HandleButton: Rectangle {
+    id: handleButton
+
+    property string face: ""
+    property color hoverColor: Color.accent
+    signal tapped()
+
+    width: panel.handleHeight
+    height: panel.handleHeight
+    radius: Math.min(Style.cornerRadius, Style.space(6))
+    color: handleButtonArea.containsMouse
+      ? Util.alpha(handleButton.hoverColor, 0.25)
+      : "transparent"
+
+    Text {
+      anchors.centerIn: parent
+      text: handleButton.face
+      font.family: Style.font.family
+      font.pixelSize: Style.font.icon
+      color: handleButtonArea.containsMouse ? handleButton.hoverColor : Color.popups.text
+    }
+
+    MouseArea {
+      id: handleButtonArea
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: handleButton.tapped()
     }
   }
 
