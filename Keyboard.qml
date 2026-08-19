@@ -291,14 +291,13 @@ Item {
     id: panel
     visible: root.opened
     // Docked: a full-width bottom strip with the card centered inside it.
-    // Floating: the window is exactly the card, anchored left+bottom and
-    // positioned by margins.
-    anchors { bottom: true; left: true; right: root.docked }
-    margins {
-      left: root.docked ? 0 : Math.round(root.floatX)
-      bottom: root.docked ? 0 : Math.round(root.floatY)
-    }
-    implicitWidth: cardWidth
+    // Floating: a full-screen transparent overlay with the card positioned
+    // inside by (floatX, floatY). The window itself never moves during a
+    // drag — moving a layer surface by its margins lags a compositor
+    // round-trip behind the pointer, so each motion event re-measures
+    // against a stale window position and the drag runs away. Moving the
+    // card as an item inside a static window is synchronous.
+    anchors { bottom: true; left: true; right: true; top: !root.docked }
     implicitHeight: card.height
     color: "transparent"
     WlrLayershell.namespace: "omarchy-osk"
@@ -325,8 +324,8 @@ Item {
       width: panel.cardWidth
       height: card.borderTop + card.borderBottom + panel.pad * 2
         + panel.handleHeight + panel.keyHeight * 5 + panel.gap * 5
-      anchors.horizontalCenter: parent.horizontalCenter
-      anchors.bottom: parent.bottom
+      x: root.docked ? Math.round((parent.width - width) / 2) : Math.round(root.floatX)
+      y: parent.height - height - (root.docked ? 0 : Math.round(root.floatY))
       color: Util.alpha(Color.background, 0.97)
       borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
       radius: Style.cornerRadius
@@ -359,25 +358,50 @@ Item {
             cursorShape: root.docked ? Qt.OpenHandCursor : Qt.SizeAllCursor
             property real pressX: 0
             property real pressY: 0
+            // Where inside the card the drag grabbed it, in window coords.
+            // Held fixed for the whole gesture so the card stays pinned
+            // under the pointer.
+            property real grabDX: 0
+            property real grabDY: 0
+            property bool regrab: false
+
+            function anchorGrab(mx, my) {
+              var p = dragArea.mapToItem(card.parent, mx, my)
+              grabDX = p.x - card.x
+              grabDY = p.y - card.y
+            }
+
             onPressed: mouse => {
               pressX = mouse.x
               pressY = mouse.y
+              regrab = false
+              anchorGrab(mouse.x, mouse.y)
             }
             onPositionChanged: mouse => {
               if (!pressed) return
-              var dx = mouse.x - pressX
-              var dy = mouse.y - pressY
               if (root.docked) {
                 // Tear-off: a real drag (not a sloppy tap) undocks in place,
                 // then the same gesture keeps moving the floating keyboard.
-                if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return
-                root.floatX = Math.round((panel.screenWidth - panel.cardWidth) / 2)
+                // The window stays put while docked, so raw deltas are safe
+                // for the threshold test.
+                if (Math.abs(mouse.x - pressX) < 12 && Math.abs(mouse.y - pressY) < 12) return
+                root.floatX = card.x
                 root.floatY = 0
                 root.setDocked(false)
+                // The window grows from a bottom strip to full-screen under
+                // the pointer, shifting the coordinate space; re-anchor the
+                // grab against the new geometry on the next event.
+                regrab = true
                 return
               }
-              root.floatX += dx
-              root.floatY -= dy
+              if (regrab) {
+                anchorGrab(mouse.x, mouse.y)
+                regrab = false
+                return
+              }
+              var p = dragArea.mapToItem(card.parent, mouse.x, mouse.y)
+              root.floatX = p.x - grabDX
+              root.floatY = card.parent.height - (p.y - grabDY) - card.height
               root.clampFloat()
             }
             onReleased: root.saveState()
