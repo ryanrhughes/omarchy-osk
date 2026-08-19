@@ -180,13 +180,58 @@ Item {
   }
 
   function commit(def) {
-    Quickshell.execDetached(Model.wtypeArgs(def, {
+    // Super chords can't be delivered: the compositor's bind matching
+    // resolves virtual-keyboard keycodes against the hardware keymap, so a
+    // Super chord sent through wtype fires whatever global bind sits at
+    // wtype's synthetic keycode (SUPER+ESCAPE, in practice). Firing random
+    // shortcuts is worse than firing none, so drop the chord and say why.
+    if (superState > 0) {
+      superState = 0
+      releaseOneShots()
+      Quickshell.execDetached(["omarchy-notification-send",
+        "On-Screen Keyboard",
+        "Super shortcuts can't be sent from the on-screen keyboard yet"])
+      return
+    }
+    enqueueSend(Model.wtypeArgs(def, {
       shift: shiftState > 0,
       ctrl: ctrlState > 0,
       alt: altState > 0,
-      super: superState > 0
+      super: false
     }))
     releaseOneShots()
+  }
+
+  // ---- key send queue -----------------------------------------------------
+  // wtype invocations must not overlap: each one creates its own virtual
+  // keyboard with its own keymap, and two alive at once make the compositor
+  // interleave keymap switches — keys get dropped (observed under
+  // auto-repeat). One process at a time, strictly in tap order.
+  property var sendQueue: []
+  property bool sending: false
+
+  function enqueueSend(args) {
+    var queue = sendQueue.slice()
+    queue.push(args)
+    sendQueue = queue
+    pumpSendQueue()
+  }
+
+  function pumpSendQueue() {
+    if (sending || sendQueue.length === 0) return
+    sending = true
+    var next = sendQueue[0]
+    sendQueue = sendQueue.slice(1)
+    sendProcess.command = next
+    sendProcess.running = true
+  }
+
+  Process {
+    id: sendProcess
+    onExited: {
+      root.sending = false
+      root.pumpSendQueue()
+    }
   }
 
   function cycleMod(mod) {

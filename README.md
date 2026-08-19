@@ -18,6 +18,7 @@ Keys are injected with `wtype` (part of Omarchy's base package set), so the keyb
 - Full QWERTY with a number row, `Esc`, `Tab`, `Del`, `Enter`, arrows, and an inverted-T-ish arrow cluster.
 - **Shift** taps once for one character, twice to lock (Caps does the same lock); letter faces change case with the latch, symbol keys show their shifted faces.
 - **Ctrl / Alt / Super** latch for the next key — tap `Ctrl` then `c` for a copy — and tap twice to hold them down for repeated chords.
+- **Super chords are not delivered yet.** Hyprland's bind matching resolves virtual-keyboard keycodes against the hardware keymap, so a Super chord sent through `wtype` would trigger whichever global bind sits at the wrong keycode (in practice, `SUPER+ESCAPE`). Until that's fixed compositor-side, tapping a key with Super latched shows a notification instead of firing a random shortcut.
 - Held keys auto-repeat (characters, `Backspace`, `Del`, `Space`, arrows).
 - Styled entirely from your active Omarchy theme: colors, corner rounding, spacing, and font all follow the shell.
 
@@ -47,3 +48,5 @@ omarchy-shell osk moveTo 100 200                  # float at left=100, bottom=20
 ```
 
 Handy as a Hyprland binding in `~/.config/hypr/bindings.lua` if you want a hardware key to raise it too.
+
+After `omarchy plugin update`, run `omarchy-restart-shell` to make sure the new plugin code is actually loaded — the shell's hot reload does not reliably swap panel code yet.
