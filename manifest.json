@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "ryan.osk",
+  "name": "On-Screen Keyboard",
+  "version": "1.0.0",
+  "author": "Ryan Hughes",
+  "license": "MIT",
+  "description": "A touch-friendly on-screen keyboard. A persistent toggle button sits in the bottom-right corner of the screen; tap it to raise a full QWERTY keyboard that types into whichever window has focus. Summon from the CLI with: omarchy-shell shell toggle ryan.osk '{}'.",
+  "kinds": [
+    "panel"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Keyboard.qml"
+  }
+}
