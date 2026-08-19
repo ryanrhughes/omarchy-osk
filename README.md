@@ -18,7 +18,7 @@ Keys are injected with `wtype` (part of Omarchy's base package set), so the keyb
 - Full QWERTY with a number row, `Esc`, `Tab`, `Del`, `Enter`, arrows, and an inverted-T-ish arrow cluster.
 - **Shift** taps once for one character, twice to lock (Caps does the same lock); letter faces change case with the latch, symbol keys show their shifted faces.
 - **Ctrl / Alt / Super** latch for the next key — tap `Ctrl` then `c` for a copy — and tap twice to hold them down for repeated chords.
-- **Super chords are not delivered yet.** Hyprland's bind matching resolves virtual-keyboard keycodes against the hardware keymap, so a Super chord sent through `wtype` would trigger whichever global bind sits at the wrong keycode (in practice, `SUPER+ESCAPE`). Until that's fixed compositor-side, tapping a key with Super latched shows a notification instead of firing a random shortcut.
+- **Super chords trigger your real Hyprland binds** — tap `Super` then `Space` for the Omarchy menu, `Super` then a digit to switch workspaces. (Under the hood, Hyprland's bind matching resolves virtual-keyboard keycodes against the hardware keymap, so the keyboard pads each `wtype` invocation with release-only dummy events to park every keysym at its true evdev keycode. The keycode table assumes a US layout; chords may hit the wrong bind on other layouts until the compositor matches by the source device's keymap.)
 - Held keys auto-repeat (characters, `Backspace`, `Del`, `Space`, arrows).
 - Styled entirely from your active Omarchy theme: colors, corner rounding, spacing, and font all follow the shell.
 

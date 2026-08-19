@@ -130,30 +130,64 @@ function findKey(name) {
   return null
 }
 
+// Linux evdev keycode for each keysym on the board (US layout). wtype
+// assigns keycodes to its synthetic keymap in argument order, and the
+// compositor's bind matching resolves those keycodes against the hardware
+// keymap — so a chord only triggers the *right* global bind if our keysym
+// sits at the keycode the hardware layout expects. Padding the invocation
+// with harmless release-only events (see below) steers each keysym onto
+// exactly this code.
+var EVDEV = {
+  Escape: 1, "1": 2, "2": 3, "3": 4, "4": 5, "5": 6, "6": 7, "7": 8,
+  "8": 9, "9": 10, "0": 11, minus: 12, equal: 13, BackSpace: 14, Tab: 15,
+  q: 16, w: 17, e: 18, r: 19, t: 20, y: 21, u: 22, i: 23, o: 24, p: 25,
+  bracketleft: 26, bracketright: 27, Return: 28,
+  a: 30, s: 31, d: 32, f: 33, g: 34, h: 35, j: 36, k: 37, l: 38,
+  semicolon: 39, apostrophe: 40, grave: 41, backslash: 43,
+  z: 44, x: 45, c: 46, v: 47, b: 48, n: 49, m: 50,
+  comma: 51, period: 52, slash: 53, space: 57,
+  Up: 103, Left: 105, Right: 106, Down: 108, Delete: 111
+}
+
+// Release-only (-p) events for never-pressed keys are ignored by apps and
+// binds alike, but each one still claims the next keycode in wtype's
+// synthetic keymap. Padding with distinct dummy keysyms (circled digits —
+// nothing on this board) until the target index puts the real key at its
+// real evdev code, so the hardware keymap and wtype's keymap agree on what
+// that keycode means.
+function paddedKeyArgs(keysym) {
+  var code = EVDEV[keysym]
+  if (!code) return ["-k", keysym]
+  var args = []
+  for (var i = 1; i < code; i++)
+    args.push("-p", "U" + (0x2460 + i).toString(16).toUpperCase())
+  args.push("-k", keysym)
+  return args
+}
+
 // wtype invocation for one key tap under the current latches.
 // mods: { shift, ctrl, alt, super } booleans.
 //
-// Plain characters go through wtype's text mode, which picks the right
-// keysym (and shift level) for the exact character — including the shifted
-// faces. The one exception is a bare "-", which text mode would parse as an
-// option, so unshifted characters use `-k <keysym>` instead. Modifier chords
-// must be key events: hold the modifiers with -M, tap the keysym, release
-// with -m (the pattern omarchy-clipboard-paste-text already relies on).
+// Plain shifted characters go through wtype's text mode, which picks the
+// right keysym and shift level for the exact character; nothing matches
+// shift-only global binds, so keycode accuracy doesn't matter there.
+// Everything else is a key event at its true evdev code (via padding), so
+// both apps and the compositor's bind matching read it correctly — that is
+// what makes Super chords land on the intended Hyprland bind. Modifiers
+// are held with -M and released with -m (the pattern
+// omarchy-clipboard-paste-text already relies on).
 function wtypeArgs(k, mods) {
   var held = []
   if (mods.ctrl) held.push("ctrl")
   if (mods.alt) held.push("alt")
   if (mods.super) held.push("logo")
 
-  if (k.kind === "char" && held.length === 0) {
-    if (mods.shift) return ["wtype", k.shift]
-    return ["wtype", "-k", k.keysym]
-  }
+  if (k.kind === "char" && held.length === 0 && mods.shift) return ["wtype", k.shift]
 
   if (mods.shift) held.unshift("shift")
   var args = ["wtype"]
   for (var i = 0; i < held.length; i++) args.push("-M", held[i])
-  args.push("-k", k.keysym)
+  args = args.concat(paddedKeyArgs(k.keysym))
   for (var j = held.length - 1; j >= 0; j--) args.push("-m", held[j])
   return args
 }

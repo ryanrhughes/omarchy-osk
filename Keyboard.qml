@@ -180,24 +180,11 @@ Item {
   }
 
   function commit(def) {
-    // Super chords can't be delivered: the compositor's bind matching
-    // resolves virtual-keyboard keycodes against the hardware keymap, so a
-    // Super chord sent through wtype fires whatever global bind sits at
-    // wtype's synthetic keycode (SUPER+ESCAPE, in practice). Firing random
-    // shortcuts is worse than firing none, so drop the chord and say why.
-    if (superState > 0) {
-      superState = 0
-      releaseOneShots()
-      Quickshell.execDetached(["omarchy-notification-send",
-        "On-Screen Keyboard",
-        "Super shortcuts can't be sent from the on-screen keyboard yet"])
-      return
-    }
     enqueueSend(Model.wtypeArgs(def, {
       shift: shiftState > 0,
       ctrl: ctrlState > 0,
       alt: altState > 0,
-      super: false
+      super: superState > 0
     }))
     releaseOneShots()
   }
