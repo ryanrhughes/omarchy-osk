@@ -90,21 +90,42 @@ Item {
     else close()
   }
 
+  // Deliberate mode change (button, IPC): reposition the card for the new
+  // mode. Tear-off during a drag skips this — the drag is already moving
+  // the card and a layout snap would yank it out from under the pointer.
   function setDocked(value) {
     if (!value && floatX < 0) {
       // First undock: lift off from where the docked keyboard sits.
-      floatX = Math.round((panel.screenWidth - panel.cardWidth) / 2)
+      floatX = Math.round((panel.width - panel.cardWidth) / 2)
       floatY = Style.gapsOut
     }
     docked = value
-    clampFloat()
+    layoutCard()
     saveState()
   }
 
-  function clampFloat() {
-    if (floatX < 0) return
-    floatX = Math.min(Math.max(0, floatX), Math.max(0, panel.screenWidth - panel.cardWidth))
-    floatY = Math.min(Math.max(0, floatY), Math.max(0, panel.screenHeight - card.height))
+  function tearOff() {
+    if (!docked) return
+    docked = false
+    // The card keeps its dragged position; it becomes the float position
+    // when the gesture releases.
+  }
+
+  // The card's x/y are plain properties (MouseArea.drag writes them
+  // directly), so every non-drag position change goes through here.
+  function layoutCard() {
+    if (dragArea.drag.active) return
+    if (docked) {
+      card.x = Math.round((panel.width - card.width) / 2)
+      card.y = panel.height - card.height
+      return
+    }
+    if (floatX >= 0) {
+      floatX = Math.min(Math.max(0, floatX), Math.max(0, panel.width - card.width))
+      floatY = Math.min(Math.max(0, floatY), Math.max(0, panel.height - card.height))
+    }
+    card.x = Math.round(Math.max(0, floatX))
+    card.y = panel.height - card.height - Math.round(Math.max(0, floatY))
   }
 
   function saveState() {
@@ -120,6 +141,7 @@ Item {
       if (isFinite(Number(data.floatX)) && Number(data.floatX) >= 0) floatX = Number(data.floatX)
       if (isFinite(Number(data.floatY)) && Number(data.floatY) >= 0) floatY = Number(data.floatY)
     } catch (e) { /* first run or unreadable */ }
+    layoutCard()
   }
 
   // The host injects `manifest` after instantiation, so wait for it before
@@ -286,27 +308,46 @@ Item {
     }
   }
 
+  // Docked mode's only job besides position is reserving space. That is
+  // delegated to this invisible bottom strip so the keyboard window itself
+  // never changes geometry — not on mode switches, not mid-drag. A window
+  // that resizes or moves during a drag lags the compositor round-trip
+  // behind the pointer and the drag runs away (spirals, flies off).
+  PanelWindow {
+    id: reserveWindow
+    visible: root.opened && root.docked
+    anchors { bottom: true; left: true; right: true }
+    implicitHeight: card.height
+    color: "transparent"
+    WlrLayershell.namespace: "omarchy-osk-reserve"
+    WlrLayershell.layer: WlrLayer.Top
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+    exclusionMode: ExclusionMode.Auto
+    // Reservation only; all input passes through.
+    mask: Region {}
+  }
+
   // ---- the keyboard -------------------------------------------------------
   PanelWindow {
     id: panel
     visible: root.opened
-    // Docked: a full-width bottom strip with the card centered inside it.
-    // Floating: a full-screen transparent overlay with the card positioned
-    // inside by (floatX, floatY). The window itself never moves during a
-    // drag — moving a layer surface by its margins lags a compositor
-    // round-trip behind the pointer, so each motion event re-measures
-    // against a stale window position and the drag runs away. Moving the
-    // card as an item inside a static window is synchronous.
-    anchors { bottom: true; left: true; right: true; top: !root.docked }
-    implicitHeight: card.height
+    // Always a full-screen transparent overlay; the card is positioned as
+    // an item inside it (bottom-center when docked, floatX/floatY when
+    // floating). Item movement is synchronous with the pointer, which is
+    // what keeps drags pinned under the finger.
+    anchors { bottom: true; left: true; right: true; top: true }
     color: "transparent"
     WlrLayershell.namespace: "omarchy-osk"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
-    exclusionMode: root.docked ? ExclusionMode.Auto : ExclusionMode.Ignore
-    // Only the card itself takes input; when docked, clicks beside it on
-    // wide screens fall through to whatever is below.
+    exclusionMode: ExclusionMode.Ignore
+    // Only the card itself takes input; clicks anywhere else fall through
+    // to whatever is below.
     mask: Region { item: card }
+
+    onWidthChanged: root.layoutCard()
+    onHeightChanged: root.layoutCard()
+    onVisibleChanged: if (visible) root.layoutCard()
 
     readonly property real screenWidth: panel.screen ? panel.screen.width : 1920
     readonly property real screenHeight: panel.screen ? panel.screen.height : 1080
@@ -324,8 +365,10 @@ Item {
       width: panel.cardWidth
       height: card.borderTop + card.borderBottom + panel.pad * 2
         + panel.handleHeight + panel.keyHeight * 5 + panel.gap * 5
-      x: root.docked ? Math.round((parent.width - width) / 2) : Math.round(root.floatX)
-      y: parent.height - height - (root.docked ? 0 : Math.round(root.floatY))
+      // x/y are set by layoutCard() and by MouseArea.drag — deliberately
+      // not bindings, so the drag can own them during a gesture.
+      onWidthChanged: root.layoutCard()
+      onHeightChanged: root.layoutCard()
       color: Util.alpha(Color.background, 0.97)
       borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
       radius: Style.cornerRadius
@@ -356,55 +399,27 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: root.docked ? Qt.OpenHandCursor : Qt.SizeAllCursor
-            property real pressX: 0
-            property real pressY: 0
-            // Where inside the card the drag grabbed it, in window coords.
-            // Held fixed for the whole gesture so the card stays pinned
-            // under the pointer.
-            property real grabDX: 0
-            property real grabDY: 0
-            property bool regrab: false
-
-            function anchorGrab(mx, my) {
-              var p = dragArea.mapToItem(card.parent, mx, my)
-              grabDX = p.x - card.x
-              grabDY = p.y - card.y
+            // Qt's own drag machinery moves the card; hand-rolled pointer
+            // math here has twice produced runaway drags (async window
+            // moves, then stale item-local coordinates re-projected through
+            // a moved transform).
+            drag.target: card
+            drag.axis: Drag.XAndYAxis
+            drag.minimumX: 0
+            drag.maximumX: Math.max(0, card.parent ? card.parent.width - card.width : 0)
+            drag.minimumY: 0
+            drag.maximumY: Math.max(0, card.parent ? card.parent.height - card.height : 0)
+            drag.onActiveChanged: {
+              // A drag beginning while docked tears the keyboard off; the
+              // gesture keeps moving it as a floating card.
+              if (drag.active && root.docked) root.tearOff()
             }
-
-            onPressed: mouse => {
-              pressX = mouse.x
-              pressY = mouse.y
-              regrab = false
-              anchorGrab(mouse.x, mouse.y)
+            onReleased: {
+              if (root.docked) return
+              root.floatX = card.x
+              root.floatY = card.parent.height - card.y - card.height
+              root.saveState()
             }
-            onPositionChanged: mouse => {
-              if (!pressed) return
-              if (root.docked) {
-                // Tear-off: a real drag (not a sloppy tap) undocks in place,
-                // then the same gesture keeps moving the floating keyboard.
-                // The window stays put while docked, so raw deltas are safe
-                // for the threshold test.
-                if (Math.abs(mouse.x - pressX) < 12 && Math.abs(mouse.y - pressY) < 12) return
-                root.floatX = card.x
-                root.floatY = 0
-                root.setDocked(false)
-                // The window grows from a bottom strip to full-screen under
-                // the pointer, shifting the coordinate space; re-anchor the
-                // grab against the new geometry on the next event.
-                regrab = true
-                return
-              }
-              if (regrab) {
-                anchorGrab(mouse.x, mouse.y)
-                regrab = false
-                return
-              }
-              var p = dragArea.mapToItem(card.parent, mouse.x, mouse.y)
-              root.floatX = p.x - grabDX
-              root.floatY = card.parent.height - (p.y - grabDY) - card.height
-              root.clampFloat()
-            }
-            onReleased: root.saveState()
           }
 
           Rectangle {
